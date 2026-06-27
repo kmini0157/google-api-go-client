@@ -1,0 +1,191 @@
+// Inbox — client logic.
+// Pipeline for a saved link, all key-free except Supabase (RLS-protected):
+//   1. Jina Reader   -> clean article text
+//   2. Puter.js LLM  -> summary + tags
+//   3. Transformers.js (local, in-browser) -> 384-dim embedding
+//   4. Supabase      -> store row (pgvector) + serve semantic search
+//
+// Loaded as a module from index.html.
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { pipeline, env } from "https://esm.sh/@xenova/transformers@2.17.2";
+
+// Transformers.js: pull weights from the CDN, run inference in-browser (WASM).
+env.allowLocalModels = false;
+
+const cfg = window.INBOX_CONFIG;
+if (!cfg || cfg.SUPABASE_URL.includes("YOUR-PROJECT")) {
+  alert("config.js is missing or unfilled — copy config.example.js to config.js first.");
+  throw new Error("Inbox: config.js not configured");
+}
+
+const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+
+// ---------------------------------------------------------------------------
+// Embedding model — loaded once, lazily, and reused. Mean-pooled + normalized
+// so cosine distance in pgvector is meaningful.
+// ---------------------------------------------------------------------------
+let _embedder = null;
+async function embed(text) {
+  if (!_embedder) {
+    setStatus("Loading embedding model (one-time, ~25MB)…");
+    _embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+  }
+  const out = await _embedder(text, { pooling: "mean", normalize: true });
+  return Array.from(out.data);
+}
+
+// ---------------------------------------------------------------------------
+// Step 1 — extract clean content with Jina Reader (no API key).
+// ---------------------------------------------------------------------------
+async function extract(url) {
+  const res = await fetch(cfg.JINA_READER + url, {
+    headers: { "X-Return-Format": "text" },
+  });
+  if (!res.ok) throw new Error(`Jina Reader failed (${res.status})`);
+  const text = await res.text();
+  // Jina prefixes a "Title: …" line; pull it out when present.
+  const titleMatch = text.match(/^Title:\s*(.+)$/m);
+  return {
+    title: titleMatch ? titleMatch[1].trim() : url,
+    content: text.slice(0, 12000), // cap for the LLM context window
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Step 2 — summary + tags via Puter.js LLM (no API key). Falls back to a
+// truncated excerpt if Puter is unavailable so a save never fully fails.
+// ---------------------------------------------------------------------------
+async function summarize(title, content) {
+  const prompt =
+    `Summarize the article in 2-3 sentences, then list 3-5 lowercase topic ` +
+    `tags. Respond as JSON: {"summary": "...", "tags": ["...","..."]}.\n\n` +
+    `Title: ${title}\n\n${content.slice(0, 8000)}`;
+  try {
+    const reply = await puter.ai.chat(prompt);
+    const raw = typeof reply === "string" ? reply : reply?.message?.content ?? "";
+    const json = raw.match(/\{[\s\S]*\}/);
+    if (json) {
+      const parsed = JSON.parse(json[0]);
+      return {
+        summary: parsed.summary || content.slice(0, 280),
+        tags: Array.isArray(parsed.tags) ? parsed.tags.slice(0, 5) : [],
+      };
+    }
+  } catch (e) {
+    console.warn("Puter summarize failed, using fallback:", e);
+  }
+  return { summary: content.slice(0, 280).trim() + "…", tags: [] };
+}
+
+// ---------------------------------------------------------------------------
+// Free/pro gate.
+// ---------------------------------------------------------------------------
+async function canSave() {
+  if (cfg.FREE_SAVES_PER_MONTH === Infinity) return true;
+  const { data, error } = await sb.rpc("saves_this_month");
+  if (error) return true; // fail open rather than block a paying-intent user
+  return data < cfg.FREE_SAVES_PER_MONTH;
+}
+
+// ---------------------------------------------------------------------------
+// Save pipeline.
+// ---------------------------------------------------------------------------
+export async function saveUrl(url) {
+  url = url.trim();
+  if (!/^https?:\/\//.test(url)) throw new Error("Enter a valid http(s) URL");
+
+  if (!(await canSave())) {
+    showPaywall();
+    throw new Error("Free monthly limit reached");
+  }
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) throw new Error("Not signed in");
+
+  setStatus("Extracting…");
+  const { title, content } = await extract(url);
+
+  setStatus("Summarizing…");
+  const { summary, tags } = await summarize(title, content);
+
+  setStatus("Indexing…");
+  const embedding = await embed(`${title}\n${summary}\n${tags.join(" ")}`);
+
+  const { error } = await sb.from("items").upsert(
+    { user_id: user.id, url, title, summary, content, tags, embedding },
+    { onConflict: "user_id,url" }
+  );
+  if (error) throw error;
+
+  setStatus("Saved ✓");
+  return { url, title, summary, tags };
+}
+
+// ---------------------------------------------------------------------------
+// Semantic search — embed the query locally, match in pgvector via RPC.
+// Empty query falls back to most-recent.
+// ---------------------------------------------------------------------------
+export async function search(query) {
+  if (!query.trim()) {
+    const { data, error } = await sb
+      .from("items")
+      .select("id,url,title,summary,tags,read,favorite,created_at")
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return data;
+  }
+  setStatus("Searching…");
+  const query_embedding = await embed(query);
+  const { data, error } = await sb.rpc("match_items", {
+    query_embedding,
+    match_count: 30,
+  });
+  if (error) throw error;
+  setStatus("");
+  return data;
+}
+
+export async function toggleField(id, field, value) {
+  const { error } = await sb.from("items").update({ [field]: value }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function remove(id) {
+  const { error } = await sb.from("items").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Auth (magic-link email — no password to manage).
+// ---------------------------------------------------------------------------
+export const auth = {
+  async signIn(email) {
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.href },
+    });
+    if (error) throw error;
+  },
+  async signOut() {
+    await sb.auth.signOut();
+  },
+  async current() {
+    const { data: { user } } = await sb.auth.getUser();
+    return user;
+  },
+  onChange(cb) {
+    sb.auth.onAuthStateChange((_e, session) => cb(session?.user ?? null));
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Small UI status helpers, wired in main.js.
+// ---------------------------------------------------------------------------
+let _statusEl = null;
+let _paywallCb = null;
+export function bindStatus(el) { _statusEl = el; }
+export function onPaywall(cb) { _paywallCb = cb; }
+function setStatus(msg) { if (_statusEl) _statusEl.textContent = msg; }
+function showPaywall() { if (_paywallCb) _paywallCb(); }

@@ -1,0 +1,12 @@
+name = "inbox-digest"
+main = "digest.js"
+compatibility_date = "2024-11-01"
+
+# Mondays 14:00 UTC. Adjust to your audience's timezone.
+[triggers]
+crons = ["0 14 * * 1"]
+
+# Set secrets (do NOT put them here):
+#   wrangler secret put SUPABASE_URL
+#   wrangler secret put SUPABASE_SERVICE_KEY
+#   wrangler secret put RESEND_API_KEY
