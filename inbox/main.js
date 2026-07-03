@@ -27,7 +27,14 @@ onPaywall(() => els.paywall.classList.remove("hidden"));
 els.closePaywall.onclick = () => els.paywall.classList.add("hidden");
 
 // --- Auth flow -------------------------------------------------------------
+// Supabase fires SIGNED_IN / TOKEN_REFRESHED repeatedly (e.g. on tab refocus);
+// only react when the signed-in user actually changes, so we don't reset the
+// list mid-session.
+let currentUserId = null;
 auth.onChange((user) => {
+  const uid = user?.id ?? null;
+  if (uid === currentUserId) return;
+  currentUserId = uid;
   if (user) {
     els.authView.classList.add("hidden");
     els.mainView.classList.remove("hidden");
@@ -54,9 +61,12 @@ els.signout.onclick = () => auth.signOut();
 els.saveBtn.onclick = doSave;
 els.urlInput.addEventListener("keydown", (e) => e.key === "Enter" && doSave());
 
+let saving = false; // guards the Enter-key path too, not just the button
 async function doSave() {
+  if (saving) return;
   const url = els.urlInput.value;
   if (!url.trim()) return;
+  saving = true;
   els.saveBtn.disabled = true;
   try {
     await saveUrl(url);
@@ -65,6 +75,7 @@ async function doSave() {
   } catch (e) {
     els.status.textContent = "⚠️ " + e.message;
   } finally {
+    saving = false;
     els.saveBtn.disabled = false;
   }
 }
@@ -76,59 +87,113 @@ els.searchInput.addEventListener("input", () => {
   searchTimer = setTimeout(refresh, 350);
 });
 
+// Sequence searches: results from a superseded (older) query must never
+// overwrite the results of a newer one, whatever order the promises resolve.
+let searchSeq = 0;
 async function refresh() {
+  const seq = ++searchSeq;
+  const query = els.searchInput.value;
   try {
-    const items = await search(els.searchInput.value);
-    render(items);
+    const items = await search(query);
+    if (seq !== searchSeq) return; // stale response — a newer search is in flight
+    render(items, query);
   } catch (e) {
-    els.status.textContent = "⚠️ " + e.message;
+    if (seq === searchSeq) els.status.textContent = "⚠️ " + e.message;
   }
 }
 
-function render(items) {
-  els.list.innerHTML = "";
+// Only ever link http(s) URLs; anything else (javascript:, data:, malformed)
+// renders as plain text.
+function safeHttpUrl(u) {
+  try {
+    const p = new URL(u);
+    return p.protocol === "http:" || p.protocol === "https:" ? p.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// el("span", "tag", text) — build DOM with textContent, never innerHTML.
+// title/summary/tags/url all originate from EXTERNAL content (fetched pages,
+// LLM output), so any string interpolation into markup is stored XSS.
+function el(tag, className, text) {
+  const n = document.createElement(tag);
+  if (className) n.className = className;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function render(items, query = "") {
+  els.list.textContent = "";
   if (!items.length) {
-    els.list.innerHTML = `<p class="empty">Nothing here yet. Paste a link above to start your inbox.</p>`;
+    els.list.appendChild(
+      el("p", "empty", query.trim()
+        ? "No matches for that search."
+        : "Nothing here yet. Paste a link above to start your inbox.")
+    );
     return;
   }
   for (const it of items) {
-    const card = document.createElement("article");
-    card.className = "card" + (it.read ? " read" : "");
-    const tags = (it.tags || []).map((t) => `<span class="tag">${t}</span>`).join("");
-    const sim = it.similarity != null ? `<span class="sim">${Math.round(it.similarity * 100)}%</span>` : "";
-    card.innerHTML = `
-      <div class="card-head">
-        <a href="${it.url}" target="_blank" rel="noopener" class="title">${it.title || it.url}</a>
-        ${sim}
-      </div>
-      <p class="summary">${it.summary || ""}</p>
-      <div class="tags">${tags}</div>
-      <div class="actions">
-        <button data-act="fav">${it.favorite ? "★" : "☆"}</button>
-        <button data-act="read">${it.read ? "Mark unread" : "Mark read"}</button>
-        <button data-act="del">Delete</button>
-      </div>`;
-    card.querySelector('[data-act="fav"]').onclick = async () => {
+    const card = el("article", "card" + (it.read ? " read" : ""));
+
+    const head = el("div", "card-head");
+    const href = safeHttpUrl(it.url);
+    let title;
+    if (href) {
+      title = el("a", "title", it.title || it.url);
+      title.href = href;
+      title.target = "_blank";
+      title.rel = "noopener";
+    } else {
+      title = el("span", "title", it.title || it.url);
+    }
+    head.appendChild(title);
+    if (it.similarity != null) {
+      head.appendChild(el("span", "sim", Math.round(it.similarity * 100) + "%"));
+    }
+    card.appendChild(head);
+
+    card.appendChild(el("p", "summary", it.summary || ""));
+
+    const tags = el("div", "tags");
+    for (const t of it.tags || []) tags.appendChild(el("span", "tag", t));
+    card.appendChild(tags);
+
+    const actions = el("div", "actions");
+    const mkBtn = (act, label, handler) => {
+      const b = el("button", null, label);
+      b.dataset.act = act;
+      b.onclick = handler;
+      actions.appendChild(b);
+    };
+    mkBtn("fav", it.favorite ? "★" : "☆", async () => {
       await toggleField(it.id, "favorite", !it.favorite);
       refresh();
-    };
-    card.querySelector('[data-act="read"]').onclick = async () => {
+    });
+    mkBtn("read", it.read ? "Mark unread" : "Mark read", async () => {
       await toggleField(it.id, "read", !it.read);
       refresh();
-    };
-    card.querySelector('[data-act="del"]').onclick = async () => {
+    });
+    mkBtn("del", "Delete", async () => {
       await remove(it.id);
       refresh();
-    };
+    });
+    card.appendChild(actions);
+
     els.list.appendChild(card);
   }
 }
 
-// --- PWA share target: ?url=... from "Share to Inbox" ----------------------
+// --- PWA share target -------------------------------------------------------
+// Android share sheets often put the link inside `text` (sometimes with
+// surrounding prose) rather than `url`, so scan all shared fields for the
+// first http(s) URL instead of trusting `url` alone.
 async function handleSharedUrl() {
-  const shared = new URLSearchParams(location.search).get("url");
-  if (shared) {
-    els.urlInput.value = shared;
+  const p = new URLSearchParams(location.search);
+  const haystack = [p.get("url"), p.get("text"), p.get("title")].filter(Boolean).join(" ");
+  const m = haystack.match(/https?:\/\/\S+/);
+  if (m) {
+    els.urlInput.value = m[0];
     history.replaceState({}, "", location.pathname);
     await doSave();
   }

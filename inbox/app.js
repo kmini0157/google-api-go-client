@@ -84,7 +84,10 @@ async function summarize(title, content) {
 async function canSave() {
   if (cfg.FREE_SAVES_PER_MONTH === Infinity) return true;
   const { data, error } = await sb.rpc("saves_this_month");
-  if (error) return true; // fail open rather than block a paying-intent user
+  // Fail closed with a clear message: silently failing open would make the
+  // free-tier limit (the whole conversion mechanism) unenforceable whenever
+  // the RPC hiccups.
+  if (error) throw new Error("Couldn't verify your monthly quota — please retry");
   return data < cfg.FREE_SAVES_PER_MONTH;
 }
 
@@ -95,13 +98,18 @@ export async function saveUrl(url) {
   url = url.trim();
   if (!/^https?:\/\//.test(url)) throw new Error("Enter a valid http(s) URL");
 
-  if (!(await canSave())) {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) throw new Error("Not signed in");
+
+  // Re-saving an already-saved URL is an update (upsert hits the existing
+  // row, no new save event) — it must not be blocked by the monthly cap.
+  const { data: existing } = await sb.from("items").select("id").eq("url", url).limit(1);
+  const isResave = Array.isArray(existing) && existing.length > 0;
+
+  if (!isResave && !(await canSave())) {
     showPaywall();
     throw new Error("Free monthly limit reached");
   }
-
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) throw new Error("Not signed in");
 
   setStatus("Extracting…");
   const { title, content } = await extract(url);
@@ -110,7 +118,11 @@ export async function saveUrl(url) {
   const { summary, tags } = await summarize(title, content);
 
   setStatus("Indexing…");
-  const embedding = await embed(`${title}\n${summary}\n${tags.join(" ")}`);
+  // Include the lead of the article body, not just title+summary+tags — the
+  // model truncates past its window anyway, but the lead adds real recall.
+  const embedding = await embed(
+    [title, summary, tags.join(" "), content.slice(0, 1000)].join("\n")
+  );
 
   const { error } = await sb.from("items").upsert(
     { user_id: user.id, url, title, summary, content, tags, embedding },

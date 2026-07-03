@@ -13,6 +13,6 @@
   "share_target": {
     "action": "./index.html",
     "method": "GET",
-    "params": { "url": "url", "text": "url", "title": "title" }
+    "params": { "url": "url", "text": "text", "title": "title" }
   }
 }
