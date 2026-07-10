@@ -1,6 +1,6 @@
 // Inbox — UI wiring. Renders auth, the save bar, search, and the item list.
 import {
-  saveUrl, search, askInbox, toggleField, remove, auth, bindStatus, onPaywall,
+  saveUrl, search, askInbox, toggleField, updateNote, remove, auth, bindStatus, onPaywall,
 } from "./app.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -28,6 +28,12 @@ const els = {
 bindStatus(els.status);
 onPaywall(() => els.paywall.classList.remove("hidden"));
 els.closePaywall.onclick = () => els.paywall.classList.add("hidden");
+
+// Wire the paywall CTA to the Stripe Payment Link when one is configured.
+const proCta = document.querySelector("#pro-cta");
+if (window.INBOX_CONFIG.STRIPE_PAYMENT_LINK) {
+  proCta.href = window.INBOX_CONFIG.STRIPE_PAYMENT_LINK;
+}
 
 // --- Auth flow -------------------------------------------------------------
 // Supabase fires SIGNED_IN / TOKEN_REFRESHED repeatedly (e.g. on tab refocus);
@@ -175,14 +181,39 @@ function el(tag, className, text) {
   return n;
 }
 
+// First-session aha flow: an empty inbox shows curated starter links so a new
+// user can experience save -> search success immediately. Clicking one fills
+// the save bar (the user still presses Save — no surprise writes).
+const STARTERS = [
+  { url: "https://jamesclear.com/atomic-habits-summary", label: "Atomic Habits — the summary worth keeping" },
+  { url: "https://waitbutwhy.com/2015/01/artificial-intelligence-revolution-1.html", label: "The AI Revolution (Wait But Why)" },
+  { url: "https://paulgraham.com/greatwork.html", label: "How to Do Great Work — Paul Graham" },
+];
+
+function starterBlock() {
+  const box = el("div", "starter");
+  box.appendChild(el("h3", "starter-title", "Start your inbox"));
+  box.appendChild(el("p", "starter-hint",
+    "Save 3 articles, then try searching by meaning — that's the moment it clicks. Pick one to prefill:"));
+  for (const s of STARTERS) {
+    const b = el("button", "starter-use", s.label);
+    b.onclick = () => {
+      els.urlInput.value = s.url;
+      els.urlInput.focus();
+    };
+    box.appendChild(b);
+  }
+  return box;
+}
+
 function render(items, query = "") {
   els.list.textContent = "";
   if (!items.length) {
-    els.list.appendChild(
-      el("p", "empty", query.trim()
-        ? "No matches for that search."
-        : "Nothing here yet. Paste a link above to start your inbox.")
-    );
+    if (query.trim()) {
+      els.list.appendChild(el("p", "empty", "No matches for that search."));
+    } else {
+      els.list.appendChild(starterBlock());
+    }
     return;
   }
   for (const it of items) {
@@ -207,6 +238,8 @@ function render(items, query = "") {
 
     card.appendChild(el("p", "summary", it.summary || ""));
 
+    if (it.note) card.appendChild(el("p", "note", "📝 " + it.note));
+
     const tags = el("div", "tags");
     for (const t of it.tags || []) tags.appendChild(el("span", "tag", t));
     card.appendChild(tags);
@@ -225,6 +258,28 @@ function render(items, query = "") {
     mkBtn("read", it.read ? "Mark unread" : "Mark read", async () => {
       await toggleField(it.id, "read", !it.read);
       refresh();
+    });
+    mkBtn("note", it.note ? "Edit note" : "Add note", () => {
+      if (card.querySelector(".note-editor")) return; // one editor at a time
+      const editor = el("div", "note-editor");
+      const ta = el("textarea", "note-input");
+      ta.value = it.note || "";
+      ta.placeholder = "Your note — it becomes searchable too";
+      const save = el("button", "note-save", "Save note");
+      save.onclick = async () => {
+        save.disabled = true;
+        try {
+          await updateNote(it.id, ta.value.trim());
+          refresh();
+        } catch (e) {
+          els.status.textContent = "⚠️ " + e.message;
+          save.disabled = false;
+        }
+      };
+      editor.appendChild(ta);
+      editor.appendChild(save);
+      card.appendChild(editor);
+      ta.focus();
     });
     mkBtn("del", "Delete", async () => {
       await remove(it.id);

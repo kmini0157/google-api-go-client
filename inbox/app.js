@@ -81,14 +81,27 @@ async function summarize(title, content) {
 // ---------------------------------------------------------------------------
 // Free/pro gate.
 // ---------------------------------------------------------------------------
+// Pro status — cached per session, but re-checked fresh at the moment a
+// quota would block: a user who upgrades mid-session must unlock without
+// signing out and back in.
+let _proCache = null;
+export async function isPro(force = false) {
+  if (!force && _proCache !== null) return _proCache;
+  const { data, error } = await sb.rpc("is_pro");
+  _proCache = error ? false : !!data;
+  return _proCache;
+}
+
 async function canSave() {
   if (cfg.FREE_SAVES_PER_MONTH === Infinity) return true;
+  if (await isPro()) return true;
   const { data, error } = await sb.rpc("saves_this_month");
   // Fail closed with a clear message: silently failing open would make the
   // free-tier limit (the whole conversion mechanism) unenforceable whenever
   // the RPC hiccups.
   if (error) throw new Error("Couldn't verify your monthly quota — please retry");
-  return data < cfg.FREE_SAVES_PER_MONTH;
+  if (data < cfg.FREE_SAVES_PER_MONTH) return true;
+  return isPro(true); // maybe they upgraded since we cached
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +155,7 @@ export async function search(query) {
   if (!query.trim()) {
     const { data, error } = await sb
       .from("items")
-      .select("id,url,title,summary,tags,read,favorite,created_at")
+      .select("id,url,title,summary,note,tags,read,favorite,created_at")
       .order("created_at", { ascending: false })
       .limit(50);
     if (error) throw error;
@@ -167,9 +180,11 @@ export async function search(query) {
 // ---------------------------------------------------------------------------
 async function canAsk() {
   if (cfg.FREE_ASKS_PER_MONTH === Infinity) return true;
+  if (await isPro()) return true;
   const { data, error } = await sb.rpc("asks_this_month");
   if (error) throw new Error("Couldn't verify your monthly quota — please retry");
-  return data < cfg.FREE_ASKS_PER_MONTH;
+  if (data < cfg.FREE_ASKS_PER_MONTH) return true;
+  return isPro(true);
 }
 
 export async function askInbox(question) {
@@ -233,6 +248,27 @@ export async function toggleField(id, field, value) {
   if (error) throw error;
 }
 
+// Save a personal note on an item and fold it into the embedding, so the note
+// text becomes searchable ("that budget article I marked for Q3 planning").
+export async function updateNote(id, note) {
+  const { data, error } = await sb
+    .from("items")
+    .select("title,summary,tags,content")
+    .eq("id", id)
+    .limit(1);
+  if (error) throw error;
+  const it = data && data[0];
+  if (!it) throw new Error("Item not found");
+
+  setStatus("Re-indexing…");
+  const embedding = await embed(
+    [it.title, it.summary, note, (it.tags || []).join(" "), (it.content || "").slice(0, 1000)].join("\n")
+  );
+  const { error: upErr } = await sb.from("items").update({ note, embedding }).eq("id", id);
+  if (upErr) throw upErr;
+  setStatus("Note saved ✓");
+}
+
 export async function remove(id) {
   const { error } = await sb.from("items").delete().eq("id", id);
   if (error) throw error;
@@ -257,7 +293,10 @@ export const auth = {
     return user;
   },
   onChange(cb) {
-    sb.auth.onAuthStateChange((_e, session) => cb(session?.user ?? null));
+    sb.auth.onAuthStateChange((_e, session) => {
+      _proCache = null; // pro status is per-user; never leak across sessions
+      cb(session?.user ?? null);
+    });
   },
 };
 

@@ -14,12 +14,16 @@ create table if not exists public.items (
   title       text,
   summary     text,
   content     text,                       -- cleaned article text (from Jina)
+  note        text,                       -- user's own note (embedded for search)
   tags        text[]      default '{}',
   embedding   vector(384),                -- all-MiniLM-L6-v2 dimension
   read        boolean     default false,
   favorite    boolean     default false,
   created_at  timestamptz default now()
 );
+
+-- Migration for databases created before the note column existed.
+alter table public.items add column if not exists note text;
 
 -- One row per user+url so re-saving updates instead of duplicating.
 create unique index if not exists items_user_url_idx
@@ -67,6 +71,7 @@ returns table (
   url text,
   title text,
   summary text,
+  note text,
   tags text[],
   read boolean,
   favorite boolean,
@@ -79,7 +84,7 @@ security invoker
 set hnsw.iterative_scan = 'relaxed_order'
 as $$
   select
-    i.id, i.url, i.title, i.summary, i.tags, i.read, i.favorite, i.created_at,
+    i.id, i.url, i.title, i.summary, i.note, i.tags, i.read, i.favorite, i.created_at,
     1 - (i.embedding <=> query_embedding) as similarity
   from public.items i
   where i.user_id = auth.uid()
@@ -183,4 +188,52 @@ as $$
   from public.ask_events
   where user_id = auth.uid()
     and created_at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc';
+$$;
+
+-- 7. Profiles / Pro tier ------------------------------------------------------
+-- is_pro is flipped ONLY by the service role (Stripe webhook or manual) which
+-- bypasses RLS; clients can read their own flag but never write it.
+create table if not exists public.profiles (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  is_pro     boolean not null default false,
+  created_at timestamptz default now()
+);
+
+alter table public.profiles enable row level security;
+
+drop policy if exists "own profile select" on public.profiles;
+create policy "own profile select"
+  on public.profiles
+  for select
+  using (auth.uid() = user_id);
+
+-- Auto-create a profile row for every new auth user.
+create or replace function public.handle_new_user ()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (user_id) values (new.id)
+  on conflict (user_id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+create or replace function public.is_pro ()
+returns boolean
+language sql
+stable
+security invoker
+as $$
+  select coalesce(
+    (select p.is_pro from public.profiles p where p.user_id = auth.uid()),
+    false
+  );
 $$;

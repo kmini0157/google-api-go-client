@@ -12,4 +12,8 @@ window.INBOX_CONFIG = {
 
   // Jina Reader endpoint (no key needed). Leave as-is.
   JINA_READER: "https://r.jina.ai/",
+
+  // Stripe Payment Link for the Pro upgrade (create one in the Stripe
+  // dashboard; no server code needed). Leave empty to hide the checkout link.
+  STRIPE_PAYMENT_LINK: "",
 };

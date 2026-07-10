@@ -79,6 +79,32 @@ button.ghost:hover { color: var(--text); }
   background: var(--panel-2); color: var(--accent);
   font-size: .75rem; padding: 2px 8px; border-radius: 999px;
 }
+.note {
+  color: var(--text); background: var(--panel-2);
+  border-left: 3px solid var(--accent); border-radius: 6px;
+  padding: 8px 12px; margin: 0 0 10px; font-size: .9rem;
+}
+.note-editor { display: flex; gap: 8px; margin-top: 10px; }
+.note-editor textarea {
+  flex: 1; min-height: 56px; resize: vertical;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit;
+}
+.note-editor button { align-self: flex-end; }
+
+.starter {
+  background: var(--panel); border: 1px dashed var(--border);
+  border-radius: var(--radius); padding: 22px; text-align: center;
+}
+.starter-title { margin: 0 0 6px; }
+.starter-hint { color: var(--muted); font-size: .92rem; margin: 0 0 14px; }
+.starter-use {
+  display: block; width: 100%; margin-bottom: 8px;
+  background: var(--panel-2); color: var(--accent); font-weight: 500;
+  text-align: left; padding: 10px 14px;
+}
+.starter-use:hover { background: var(--border); color: var(--text); }
+
 .actions { display: flex; gap: 8px; }
 .actions button { background: var(--panel-2); color: var(--muted); padding: 6px 12px; font-size: .85rem; font-weight: 500; }
 .actions button:hover { color: var(--text); background: var(--border); }
