@@ -178,6 +178,27 @@ create policy "own ask events insert"
   for insert
   with check (auth.uid() = user_id);
 
+-- Clients insert these rows directly, so pin the fields server-side: a
+-- crafted insert can't backdate/forward-date created_at (which would skew
+-- the monthly count) or spoof user_id past the policy.
+create or replace function public.pin_ask_event ()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  new.user_id := auth.uid();
+  new.created_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists ask_events_pin on public.ask_events;
+create trigger ask_events_pin
+  before insert on public.ask_events
+  for each row execute function public.pin_ask_event();
+
 create or replace function public.asks_this_month ()
 returns int
 language sql
@@ -237,3 +258,161 @@ as $$
     false
   );
 $$;
+
+-- 8. Digest preferences (ntfy push) ------------------------------------------
+create table if not exists public.digest_prefs (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  ntfy_topic text,
+  updated_at timestamptz default now()
+);
+
+alter table public.digest_prefs enable row level security;
+
+drop policy if exists "own digest prefs" on public.digest_prefs;
+create policy "own digest prefs"
+  on public.digest_prefs
+  for all
+  using  (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Related items for the weekly digest: older saves similar to the user's
+-- newest unread one. SECURITY DEFINER because the digest worker (service
+-- role) computes this for arbitrary users; client roles cannot execute it,
+-- so it never becomes a cross-user read primitive.
+create or replace function public.related_items (p_user uuid, p_limit int default 3)
+returns table (url text, title text, summary text, similarity float)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with newest as (
+    select i.id, i.embedding
+    from public.items i
+    where i.user_id = p_user and i.read = false and i.embedding is not null
+    order by i.created_at desc
+    limit 1
+  )
+  select i.url, i.title, i.summary,
+         1 - (i.embedding <=> n.embedding) as similarity
+  from public.items i
+  cross join newest n
+  where i.user_id = p_user
+    and i.id <> n.id
+    and i.embedding is not null
+  order by i.embedding <=> n.embedding
+  limit p_limit;
+$$;
+
+revoke execute on function public.related_items(uuid, int) from public, anon, authenticated;
+grant execute on function public.related_items(uuid, int) to service_role;
+
+-- 9. Public collections --------------------------------------------------------
+-- The acquisition loop: a user shares a curated collection; the public page
+-- carries a "start your own Inbox" CTA. id and slug are generated client-side
+-- (crypto.randomUUID / random hex) so inserts need no RETURNING round-trip.
+create table if not exists public.collections (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  title      text not null,
+  slug       text not null unique,
+  is_public  boolean not null default false,
+  created_at timestamptz default now()
+);
+
+create unique index if not exists collections_user_title_idx
+  on public.collections (user_id, title);
+
+alter table public.collections enable row level security;
+
+drop policy if exists "collections owner or public read" on public.collections;
+create policy "collections owner or public read"
+  on public.collections
+  for select
+  using (auth.uid() = user_id or is_public);
+
+drop policy if exists "collections owner write" on public.collections;
+create policy "collections owner write"
+  on public.collections
+  for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "collections owner update" on public.collections;
+create policy "collections owner update"
+  on public.collections
+  for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "collections owner delete" on public.collections;
+create policy "collections owner delete"
+  on public.collections
+  for delete
+  using (auth.uid() = user_id);
+
+create table if not exists public.collection_items (
+  collection_id uuid not null references public.collections (id) on delete cascade,
+  item_id       uuid not null references public.items (id) on delete cascade,
+  added_at      timestamptz default now(),
+  primary key (collection_id, item_id)
+);
+
+alter table public.collection_items enable row level security;
+
+drop policy if exists "collection items visible with collection" on public.collection_items;
+create policy "collection items visible with collection"
+  on public.collection_items
+  for select
+  using (exists (
+    select 1 from public.collections c
+    where c.id = collection_id and (c.user_id = auth.uid() or c.is_public)
+  ));
+
+-- Insert requires owning BOTH the collection and the item — you can't
+-- publish someone else's saves into your collection.
+drop policy if exists "collection items owner insert" on public.collection_items;
+create policy "collection items owner insert"
+  on public.collection_items
+  for insert
+  with check (
+    exists (select 1 from public.collections c
+            where c.id = collection_id and c.user_id = auth.uid())
+    and
+    exists (select 1 from public.items i
+            where i.id = item_id and i.user_id = auth.uid())
+  );
+
+drop policy if exists "collection items owner delete" on public.collection_items;
+create policy "collection items owner delete"
+  on public.collection_items
+  for delete
+  using (exists (
+    select 1 from public.collections c
+    where c.id = collection_id and c.user_id = auth.uid()
+  ));
+
+-- Anonymous share-page accessor: items RLS is owner-only, so the public page
+-- reads through this definer function, gated hard on is_public.
+create or replace function public.public_collection (p_slug text)
+returns table (
+  collection_title text,
+  url text,
+  item_title text,
+  summary text,
+  tags text[]
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select c.title, i.url, i.title, i.summary, i.tags
+  from public.collections c
+  join public.collection_items ci on ci.collection_id = c.id
+  join public.items i on i.id = ci.item_id
+  where c.slug = p_slug
+    and c.is_public
+  order by ci.added_at desc;
+$$;
+
+grant execute on function public.public_collection(text) to anon, authenticated;

@@ -1,6 +1,7 @@
 // Inbox — UI wiring. Renders auth, the save bar, search, and the item list.
 import {
-  saveUrl, search, askInbox, toggleField, updateNote, remove, auth, bindStatus, onPaywall,
+  saveUrl, search, askInbox, toggleField, updateNote, remove, shareToCollection,
+  auth, bindStatus, onPaywall,
 } from "./app.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -44,6 +45,11 @@ auth.onChange((user) => {
   const uid = user?.id ?? null;
   if (uid === currentUserId) return;
   currentUserId = uid;
+  // The answer panel holds private data (titles/URLs from the previous
+  // account's saves) — never let it survive an account switch or sign-out.
+  els.answer.classList.add("hidden");
+  els.answer.textContent = "";
+  els.askInput.value = "";
   if (user) {
     els.authView.classList.add("hidden");
     els.mainView.classList.remove("hidden");
@@ -67,12 +73,14 @@ els.signin.onclick = async () => {
 els.signout.onclick = () => auth.signOut();
 
 // --- Save ------------------------------------------------------------------
+// isComposing guard: with a Korean/Japanese IME, the Enter that commits the
+// composition fires a keydown too — it must not submit.
 els.saveBtn.onclick = doSave;
-els.urlInput.addEventListener("keydown", (e) => e.key === "Enter" && doSave());
+els.urlInput.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && doSave());
 
 let saving = false; // guards the Enter-key path too, not just the button
 async function doSave() {
-  if (saving) return;
+  if (saving || asking) return; // see doAsk: shared #status, no interleaving
   const url = els.urlInput.value;
   if (!url.trim()) return;
   saving = true;
@@ -91,11 +99,14 @@ async function doSave() {
 
 // --- Ask-your-inbox ----------------------------------------------------------
 els.askBtn.onclick = doAsk;
-els.askInput.addEventListener("keydown", (e) => e.key === "Enter" && doAsk());
+els.askInput.addEventListener("keydown", (e) => e.key === "Enter" && !e.isComposing && doAsk());
 
 let asking = false;
 async function doAsk() {
-  if (asking) return;
+  // Mutual exclusion with doSave: both flows narrate through the single
+  // #status element, so letting them interleave stomps each other's progress
+  // messages mid-await.
+  if (asking || saving) return;
   const q = els.askInput.value.trim();
   if (!q) return;
   asking = true;
@@ -280,6 +291,16 @@ function render(items, query = "") {
       editor.appendChild(save);
       card.appendChild(editor);
       ta.focus();
+    });
+    mkBtn("share", "Share", async () => {
+      const name = prompt("Add to public collection:", "My reading list");
+      if (!name) return;
+      try {
+        const link = await shareToCollection(it.id, name);
+        els.status.textContent = "Public collection link: " + link;
+      } catch (e) {
+        els.status.textContent = "⚠️ " + e.message;
+      }
     });
     mkBtn("del", "Delete", async () => {
       await remove(it.id);

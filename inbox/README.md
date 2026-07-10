@@ -80,10 +80,16 @@ multi-device sync · highlights & notes (next).
 
 - [x] Ask-your-inbox: RAG answers over your saved corpus (shipped — free tier
       metered via `FREE_ASKS_PER_MONTH` / `asks_this_month` RPC)
-- [ ] Highlights + notes on saved items (more personal data = deeper lock-in)
-- [ ] "Related to what you saved" resurfacing (uses the embeddings you already have)
-- [ ] Browser extension + iOS/Android share sheet (lower save friction)
-- [ ] Public/shareable collections (viral loop → acquisition)
+- [x] Notes on saved items, folded into the embedding so they're searchable
+- [x] "Related to what you saved" resurfacing in the weekly digest
+- [x] Public/shareable collections with a signup CTA (`collection.html`)
+- [x] Pro tier plumbing: `profiles.is_pro` bypasses quotas; paywall CTA links
+      to a Stripe Payment Link (see DEPLOY.md for the webhook step)
+- [x] ntfy push alongside the digest email (`digest_prefs.ntfy_topic`)
+- [x] Onboarding starter links for the first-session save→search aha moment
+- [ ] Browser extension (share sheet already works via the PWA share target)
+
+Deploying for real? Follow [DEPLOY.md](DEPLOY.md) — ~40 minutes, ~$1/month.
 
 ## Security notes
 

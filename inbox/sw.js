@@ -1,11 +1,13 @@
 // Minimal service worker: caches the app shell for offline launch and enables
 // the PWA share target. Network-first for everything else so saves stay fresh.
-const CACHE = "inbox-v2";
+const CACHE = "inbox-v3";
 const SHELL = [
   "./index.html",
   "./styles.css",
   "./main.js",
   "./app.js",
+  "./collection.html",
+  "./collection.js",
   "./manifest.webmanifest",
 ];
 
