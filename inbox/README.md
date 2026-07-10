@@ -46,7 +46,23 @@ device, not your server.
             Cloudflare Worker (cron) → Resend weekly digest
 ```
 
-## Setup (10 min)
+## Try it in 30 seconds (zero setup)
+
+```bash
+./run-demo.sh        # or: python3 -m http.server 8080
+# open http://localhost:8080 — that's it
+```
+
+No accounts, no keys: with no `config.js` the app boots in **demo mode** —
+sign in with any email (instant, nothing is sent), and everything persists in
+your browser's localStorage. Extraction, summarization, and embeddings were
+always key-free and client-side, so the demo is the real pipeline, not a mock.
+
+Prefer a hosted URL? The repo ships `.github/workflows/deploy-inbox-pages.yml`:
+enable **Settings → Pages → Source: GitHub Actions** once, and every push
+publishes the demo to `https://<user>.github.io/<repo>/`.
+
+## Full setup — sync, auth, digest (10 min)
 
 1. **Create a Supabase project** → SQL editor → paste & run
    [`supabase/schema.sql`](supabase/schema.sql). This creates the `items`

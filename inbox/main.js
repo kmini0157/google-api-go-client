@@ -1,8 +1,9 @@
 // Inbox — UI wiring. Renders auth, the save bar, search, and the item list.
 import {
   saveUrl, search, askInbox, toggleField, updateNote, remove, shareToCollection,
-  auth, bindStatus, onPaywall,
+  auth, bindStatus, onPaywall, IS_DEMO,
 } from "./app.js";
+import { cfg } from "./client.js";
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -32,8 +33,18 @@ els.closePaywall.onclick = () => els.paywall.classList.add("hidden");
 
 // Wire the paywall CTA to the Stripe Payment Link when one is configured.
 const proCta = document.querySelector("#pro-cta");
-if (window.INBOX_CONFIG.STRIPE_PAYMENT_LINK) {
-  proCta.href = window.INBOX_CONFIG.STRIPE_PAYMENT_LINK;
+if (cfg.STRIPE_PAYMENT_LINK) {
+  proCta.href = cfg.STRIPE_PAYMENT_LINK;
+}
+
+// Demo mode: zero-setup, everything stays in this browser.
+if (IS_DEMO) {
+  const banner = document.createElement("div");
+  banner.className = "demo-banner";
+  banner.textContent =
+    "🧪 Demo mode — your data stays in this browser. Sign in with any email (instant, no mail sent). Connect Supabase for sync & the weekly digest.";
+  document.querySelector("#app").prepend(banner);
+  els.email.placeholder = "any@email.works";
 }
 
 // --- Auth flow -------------------------------------------------------------
@@ -64,7 +75,9 @@ auth.onChange((user) => {
 els.signin.onclick = async () => {
   try {
     await auth.signIn(els.email.value.trim());
-    els.authMsg.textContent = "Check your email for the sign-in link ✉️";
+    els.authMsg.textContent = IS_DEMO
+      ? "Signed in — demo session, no email sent ✓"
+      : "Check your email for the sign-in link ✉️";
   } catch (e) {
     els.authMsg.textContent = e.message;
   }

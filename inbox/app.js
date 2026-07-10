@@ -7,19 +7,13 @@
 //
 // Loaded as a module from index.html.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { pipeline, env } from "https://esm.sh/@xenova/transformers@2.17.2";
+import { sb, cfg, IS_DEMO } from "./client.js";
+
+export { IS_DEMO };
 
 // Transformers.js: pull weights from the CDN, run inference in-browser (WASM).
 env.allowLocalModels = false;
-
-const cfg = window.INBOX_CONFIG;
-if (!cfg || cfg.SUPABASE_URL.includes("YOUR-PROJECT")) {
-  alert("config.js is missing or unfilled — copy config.example.js to config.js first.");
-  throw new Error("Inbox: config.js not configured");
-}
-
-const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
 // ---------------------------------------------------------------------------
 // Embedding model — loaded once, lazily, and reused. Mean-pooled + normalized

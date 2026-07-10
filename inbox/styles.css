@@ -17,6 +17,12 @@ body {
   color: var(--text);
 }
 #app { max-width: 720px; margin: 0 auto; padding: 24px 16px 80px; }
+
+.demo-banner {
+  background: var(--accent-2); color: white;
+  border-radius: 10px; padding: 10px 14px;
+  font-size: .85rem; line-height: 1.45; margin-bottom: 18px;
+}
 header { display: flex; align-items: center; justify-content: space-between; }
 h1 { font-size: 1.4rem; margin: 0; }
 .lede { color: var(--muted); font-size: 1.05rem; }

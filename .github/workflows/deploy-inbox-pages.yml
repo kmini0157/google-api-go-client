@@ -1,0 +1,36 @@
+# Deploys the Inbox app to GitHub Pages. With no config.js in the repo the
+# app boots in demo mode automatically — zero credentials needed, data stays
+# in each visitor's browser.
+#
+# One-time setup: repo Settings → Pages → Source: "GitHub Actions".
+name: Deploy Inbox to GitHub Pages
+
+on:
+  push:
+    branches: [main, claude/dev-tools-resources-omsaz9]
+    paths: ["inbox/**", ".github/workflows/deploy-inbox-pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: inbox
+      - id: deployment
+        uses: actions/deploy-pages@v4

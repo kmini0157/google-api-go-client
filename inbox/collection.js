@@ -1,10 +1,7 @@
 // Public collection share page. Anonymous readers fetch through the
 // public_collection definer RPC (gated on is_public server-side), so no
 // login is needed and private items are never reachable.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-
-const cfg = window.INBOX_CONFIG;
-const sb = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+import { sb } from "./client.js";
 
 const $ = (sel) => document.querySelector(sel);
 
