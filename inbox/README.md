@@ -2,7 +2,10 @@
 
 Save any link. It's auto-extracted, summarized, tagged, and embedded so you can
 search your saved reading **by meaning** — "that article about burnout" finds it
-even if those words never appeared in the title.
+even if those words never appeared in the title. With **Ask-your-inbox**, you
+can ask questions and get answers cited from your own saved corpus — retrieval
+is the pgvector index you already have, generation runs client-side, so an
+answer costs the server nothing.
 
 The point isn't the features. It's the **moat**: the more you save, the more
 valuable *your* personal semantic index becomes, and the more it hurts to leave.
@@ -75,10 +78,11 @@ multi-device sync · highlights & notes (next).
 
 ## Roadmap / stickiness levers
 
+- [x] Ask-your-inbox: RAG answers over your saved corpus (shipped — free tier
+      metered via `FREE_ASKS_PER_MONTH` / `asks_this_month` RPC)
 - [ ] Highlights + notes on saved items (more personal data = deeper lock-in)
 - [ ] "Related to what you saved" resurfacing (uses the embeddings you already have)
 - [ ] Browser extension + iOS/Android share sheet (lower save friction)
-- [ ] Ask-your-inbox: RAG chat over your saved corpus
 - [ ] Public/shareable collections (viral loop → acquisition)
 
 ## Security notes

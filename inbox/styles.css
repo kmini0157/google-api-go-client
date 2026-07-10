@@ -46,6 +46,19 @@ button.ghost:hover { color: var(--text); }
 .save-bar { display: flex; gap: 10px; margin-bottom: 14px; }
 .save-bar input { flex: 1; }
 #search-input { margin-bottom: 12px; }
+
+.ask-bar { display: flex; gap: 10px; margin-bottom: 12px; }
+.ask-bar input { flex: 1; }
+.answer {
+  background: var(--panel); border: 1px solid var(--accent-2);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 14px;
+}
+.answer-text { margin: 0 0 10px; white-space: pre-wrap; }
+.answer-sources { display: flex; flex-direction: column; gap: 4px; }
+.answer-sources .src {
+  color: var(--accent); font-size: .85rem; text-decoration: none;
+}
+.answer-sources a.src:hover { text-decoration: underline; }
 .status { min-height: 1.2em; color: var(--accent); font-size: .9rem; }
 
 #list { display: flex; flex-direction: column; gap: 12px; }

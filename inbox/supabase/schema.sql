@@ -144,3 +144,43 @@ as $$
   where user_id = auth.uid()
     and created_at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc';
 $$;
+
+-- 6. Ask-your-inbox usage metering ------------------------------------------
+-- Unlike saves, the ask LLM call runs entirely client-side, so this cap is
+-- advisory (a determined user could skip logging). That's acceptable: the
+-- metered resource costs us nothing — the cap exists as a conversion nudge,
+-- not to protect infrastructure. Clients insert their own rows (RLS-checked).
+create table if not exists public.ask_events (
+  id         bigint generated always as identity primary key,
+  user_id    uuid not null,
+  created_at timestamptz default now()
+);
+
+create index if not exists ask_events_user_created_idx
+  on public.ask_events (user_id, created_at desc);
+
+alter table public.ask_events enable row level security;
+
+drop policy if exists "own ask events select" on public.ask_events;
+create policy "own ask events select"
+  on public.ask_events
+  for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "own ask events insert" on public.ask_events;
+create policy "own ask events insert"
+  on public.ask_events
+  for insert
+  with check (auth.uid() = user_id);
+
+create or replace function public.asks_this_month ()
+returns int
+language sql
+stable
+security invoker
+as $$
+  select count(*)::int
+  from public.ask_events
+  where user_id = auth.uid()
+    and created_at >= date_trunc('month', now() at time zone 'utc') at time zone 'utc';
+$$;

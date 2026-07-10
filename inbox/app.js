@@ -159,6 +159,75 @@ export async function search(query) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Ask-your-inbox — RAG over the user's saved corpus. Reuses the embeddings
+// and match_items RPC that search already relies on, so the marginal cost of
+// an answer is zero: retrieval is pgvector, generation is the user's own
+// Puter.js session.
+// ---------------------------------------------------------------------------
+async function canAsk() {
+  if (cfg.FREE_ASKS_PER_MONTH === Infinity) return true;
+  const { data, error } = await sb.rpc("asks_this_month");
+  if (error) throw new Error("Couldn't verify your monthly quota — please retry");
+  return data < cfg.FREE_ASKS_PER_MONTH;
+}
+
+export async function askInbox(question) {
+  question = question.trim();
+  if (!question) throw new Error("Ask something first");
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) throw new Error("Not signed in");
+
+  if (!(await canAsk())) {
+    showPaywall();
+    throw new Error("Free monthly ask limit reached");
+  }
+
+  setStatus("Finding relevant saves…");
+  const query_embedding = await embed(question);
+  const { data: sources, error } = await sb.rpc("match_items", {
+    query_embedding,
+    match_count: 6,
+  });
+  if (error) throw error;
+  if (!sources || !sources.length) {
+    setStatus("");
+    return {
+      answer: "Nothing in your inbox matches that yet — save a few links on the topic first.",
+      sources: [],
+    };
+  }
+
+  setStatus("Thinking…");
+  const context = sources
+    .map((s, i) => `[${i + 1}] ${s.title}\n${s.summary || ""}\nTags: ${(s.tags || []).join(", ")}`)
+    .join("\n\n");
+  const prompt =
+    `Answer the question using ONLY the numbered sources below — they are ` +
+    `articles the user saved. Cite sources inline as [1], [2]. If the sources ` +
+    `don't contain the answer, say so plainly.\n\n` +
+    `SOURCES:\n${context}\n\nQUESTION: ${question}`;
+
+  let answer;
+  try {
+    const reply = await puter.ai.chat(prompt);
+    answer = typeof reply === "string" ? reply : reply?.message?.content ?? "";
+  } catch (e) {
+    setStatus("");
+    throw new Error("The answer model is unavailable right now — please retry");
+  }
+  if (!answer.trim()) throw new Error("The answer model returned nothing — please retry");
+
+  // Meter AFTER success so a failed attempt never consumes quota. Logging
+  // failure is non-fatal — the cap is advisory (see schema notes).
+  const { error: logErr } = await sb.from("ask_events").insert({ user_id: user.id });
+  if (logErr) console.warn("ask metering failed:", logErr);
+
+  setStatus("");
+  return { answer, sources };
+}
+
 export async function toggleField(id, field, value) {
   const { error } = await sb.from("items").update({ [field]: value }).eq("id", id);
   if (error) throw error;

@@ -1,6 +1,6 @@
 // Inbox — UI wiring. Renders auth, the save bar, search, and the item list.
 import {
-  saveUrl, search, toggleField, remove, auth, bindStatus, onPaywall,
+  saveUrl, search, askInbox, toggleField, remove, auth, bindStatus, onPaywall,
 } from "./app.js";
 
 const $ = (sel) => document.querySelector(sel);
@@ -16,6 +16,9 @@ const els = {
   urlInput: $("#url-input"),
   saveBtn: $("#save-btn"),
   searchInput: $("#search-input"),
+  askInput: $("#ask-input"),
+  askBtn: $("#ask-btn"),
+  answer: $("#answer"),
   status: $("#status"),
   list: $("#list"),
   paywall: $("#paywall"),
@@ -77,6 +80,55 @@ async function doSave() {
   } finally {
     saving = false;
     els.saveBtn.disabled = false;
+  }
+}
+
+// --- Ask-your-inbox ----------------------------------------------------------
+els.askBtn.onclick = doAsk;
+els.askInput.addEventListener("keydown", (e) => e.key === "Enter" && doAsk());
+
+let asking = false;
+async function doAsk() {
+  if (asking) return;
+  const q = els.askInput.value.trim();
+  if (!q) return;
+  asking = true;
+  els.askBtn.disabled = true;
+  els.answer.classList.remove("hidden");
+  els.answer.textContent = "Thinking…";
+  try {
+    const { answer, sources } = await askInbox(q);
+    renderAnswer(answer, sources);
+  } catch (e) {
+    els.answer.classList.add("hidden");
+    els.status.textContent = "⚠️ " + e.message;
+  } finally {
+    asking = false;
+    els.askBtn.disabled = false;
+  }
+}
+
+// The answer is LLM output over external content — render it as text only,
+// same rule as render() below.
+function renderAnswer(answer, sources) {
+  els.answer.textContent = "";
+  els.answer.appendChild(el("p", "answer-text", answer));
+  if (sources.length) {
+    const box = el("div", "answer-sources");
+    sources.forEach((s, i) => {
+      const label = `[${i + 1}] ${s.title || s.url}`;
+      const href = safeHttpUrl(s.url);
+      if (href) {
+        const a = el("a", "src", label);
+        a.href = href;
+        a.target = "_blank";
+        a.rel = "noopener";
+        box.appendChild(a);
+      } else {
+        box.appendChild(el("span", "src", label));
+      }
+    });
+    els.answer.appendChild(box);
   }
 }
 

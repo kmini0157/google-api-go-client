@@ -6,8 +6,9 @@ window.INBOX_CONFIG = {
   SUPABASE_URL: "https://YOUR-PROJECT.supabase.co",
   SUPABASE_ANON_KEY: "YOUR-ANON-KEY",
 
-  // Free-tier limit. Set to Infinity for self-host / unlimited.
+  // Free-tier limits. Set to Infinity for self-host / unlimited.
   FREE_SAVES_PER_MONTH: 30,
+  FREE_ASKS_PER_MONTH: 10,
 
   // Jina Reader endpoint (no key needed). Leave as-is.
   JINA_READER: "https://r.jina.ai/",
